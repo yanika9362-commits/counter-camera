@@ -1,123 +1,149 @@
 <!DOCTYPE html>
-<html lang="th">
+<html>
 <head>
 <meta charset="UTF-8">
-<title>Realtime Counter Stable</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Realtime Counter (Stable Mode)</title>
+
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+
 <style>
-body { font-family: Arial; text-align:center; }
-video, canvas { width:90%; max-width:420px; }
-button, input { font-size:18px; padding:10px; width:90%; margin-top:8px; }
-#count { font-size:36px; color:#007AFF; margin:10px; }
+body{
+  font-family:Arial;
+  text-align:center;
+  background:#f4f6f9;
+}
+
+canvas{
+  width:90%;
+  max-width:420px;
+  border:3px solid #333;
+  border-radius:10px;
+}
+
+video{
+  display:none; /* ซ่อน video ลดการ render ซ้อน */
+}
+
+input{
+  padding:8px;
+  font-size:16px;
+  width:140px;
+  margin:10px;
+}
+
+button{
+  padding:10px 18px;
+  font-size:16px;
+  margin:5px;
+  border:none;
+  border-radius:6px;
+  background:#007bff;
+  color:white;
+}
+
+#count{
+  font-size:28px;
+  font-weight:bold;
+  margin-top:10px;
+}
 </style>
 </head>
 
 <body>
 
-<h2>นับแบบ Real-time</h2>
-<input type="number" id="targetMM" value="10" placeholder="ขนาด (mm)">
-<button id="toggleBtn">▶ เริ่ม</button>
+<h2>Realtime Item Counter</h2>
+
+<input type="number" id="sizeInput" placeholder="ขนาดชิ้นงาน (mm)">
+<br>
+
+<button onclick="startProcess()">เริ่ม</button>
+<button onclick="stopProcess()">หยุด</button>
+
+<div id="count">จำนวน: 0</div>
 
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
-<div id="count">จำนวนทั้งหมด: 0</div>
 
 <script>
-let running = false;
-let animationId = null;
-let mmPerPixel = 0.2;
 
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const btn = document.getElementById("toggleBtn");
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
 
-async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false
-    });
-    video.srcObject = stream;
+let intervalId;
+let streaming = false;
+
+// เปิดกล้องหลัง (ลด resolution + fps เพื่อความลื่น)
+navigator.mediaDevices.getUserMedia({
+  video:{
+    facingMode:{ ideal:"environment" },
+    width:{ ideal:640 },
+    height:{ ideal:480 },
+    frameRate:{ ideal:15, max:15 }
+  }
+})
+.then(stream=>{
+  video.srcObject = stream;
+  video.play();
+})
+.catch(err=>{
+  alert("เปิดกล้องไม่ได้: " + err);
+});
+
+video.addEventListener("loadedmetadata",()=>{
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  streaming = true;
+});
+
+function startProcess(){
+  if(!streaming) return;
+  intervalId = setInterval(processFrame, 400); // ประมวลผลทุก 400ms
 }
 
-startCamera();
-
-btn.onclick = function(){
-    running = !running;
-    btn.innerText = running ? "⏸ หยุด" : "▶ เริ่ม";
-
-    if (running) processFrame();
-    else cancelAnimationFrame(animationId);
-};
+function stopProcess(){
+  clearInterval(intervalId);
+}
 
 function processFrame(){
-    if (!running) return;
 
-    if (!video.videoWidth) {
-        animationId = requestAnimationFrame(processFrame);
-        return;
+  if(typeof cv === "undefined" || !streaming) return;
+
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+  let src = cv.imread(canvas);
+  let gray = new cv.Mat();
+  let thresh = new cv.Mat();
+
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(gray, gray, new cv.Size(3,3), 0);
+  cv.threshold(gray, thresh, 120, 255, cv.THRESH_BINARY_INV);
+
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  let count = 0;
+
+  for(let i=0;i<contours.size();i++){
+    let cnt = contours.get(i);
+    let area = cv.contourArea(cnt);
+
+    if(area > 500){ // กรอง noise ปรับได้ตามจริง
+      count++;
     }
+  }
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
+  document.getElementById("count").innerText = "จำนวน: " + count;
 
-    let targetMM = parseFloat(document.getElementById("targetMM").value);
-    let tolerance = targetMM * 0.2;
-
-    let src = cv.imread(canvas);
-    let gray = new cv.Mat();
-    let binary = new cv.Mat();
-
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, gray, new cv.Size(5,5), 0);
-
-    // 🔥 adaptive threshold แก้ปัญหาแสง
-    cv.adaptiveThreshold(
-        gray, binary, 255,
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv.THRESH_BINARY_INV,
-        11, 2
-    );
-
-    let contours = new cv.MatVector();
-    let hierarchy = new cv.Mat();
-    cv.findContours(binary, contours, hierarchy,
-                    cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    let count = 0;
-
-    for (let i = 0; i < contours.size(); i++) {
-        let rect = cv.boundingRect(contours.get(i));
-        let widthMM = rect.width * mmPerPixel;
-
-        if (Math.abs(widthMM - targetMM) < tolerance) {
-            count++;
-            cv.rectangle(
-                src,
-                new cv.Point(rect.x, rect.y),
-                new cv.Point(rect.x + rect.width, rect.y + rect.height),
-                [0,255,0,255],
-                2
-            );
-        }
-    }
-
-    cv.imshow(canvas, src);
-    document.getElementById("count").innerText =
-        "จำนวนทั้งหมด: " + count;
-
-    src.delete(); gray.delete(); binary.delete();
-    contours.delete(); hierarchy.delete();
-
-    animationId = requestAnimationFrame(processFrame);
+  src.delete();
+  gray.delete();
+  thresh.delete();
+  contours.delete();
+  hierarchy.delete();
 }
 
-// 🔥 รอ OpenCV โหลดก่อน
-cv['onRuntimeInitialized'] = function(){
-    console.log("OpenCV Ready");
-};
 </script>
 
 </body>
