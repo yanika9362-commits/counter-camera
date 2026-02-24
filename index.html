@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Realtime Counter (Stable Mode)</title>
+<title>Stable Pro Counter</title>
 
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 
@@ -22,14 +22,14 @@ canvas{
 }
 
 video{
-  display:none; /* ซ่อน video ลดการ render ซ้อน */
+  display:none;
 }
 
 input{
   padding:8px;
   font-size:16px;
-  width:140px;
-  margin:10px;
+  width:160px;
+  margin:5px;
 }
 
 button{
@@ -43,18 +43,19 @@ button{
 }
 
 #count{
-  font-size:28px;
+  font-size:30px;
   font-weight:bold;
-  margin-top:10px;
+  margin-top:15px;
 }
 </style>
 </head>
 
 <body>
 
-<h2>Realtime Item Counter</h2>
+<h2>Stable Pro Counter</h2>
 
-<input type="number" id="sizeInput" placeholder="ขนาดชิ้นงาน (mm)">
+<input type="number" id="minArea" placeholder="Min Area">
+<input type="number" id="maxArea" placeholder="Max Area">
 <br>
 
 <button onclick="startProcess()">เริ่ม</button>
@@ -73,8 +74,9 @@ let ctx = canvas.getContext("2d");
 
 let intervalId;
 let streaming = false;
+let history = [];
 
-// เปิดกล้องหลัง (ลด resolution + fps เพื่อความลื่น)
+// เปิดกล้องหลัง
 navigator.mediaDevices.getUserMedia({
   video:{
     facingMode:{ ideal:"environment" },
@@ -99,11 +101,22 @@ video.addEventListener("loadedmetadata",()=>{
 
 function startProcess(){
   if(!streaming) return;
-  intervalId = setInterval(processFrame, 400); // ประมวลผลทุก 400ms
+  intervalId = setInterval(processFrame, 500);
 }
 
 function stopProcess(){
   clearInterval(intervalId);
+}
+
+function updateStableCount(newCount){
+  history.push(newCount);
+  if(history.length > 5){
+    history.shift();
+  }
+  let avg = Math.round(
+    history.reduce((a,b)=>a+b,0) / history.length
+  );
+  document.getElementById("count").innerText = "จำนวน: " + avg;
 }
 
 function processFrame(){
@@ -113,12 +126,33 @@ function processFrame(){
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
   let src = cv.imread(canvas);
+
+  // ROI ลดพื้นที่คำนวณ
+  let roi = src.roi(
+    new cv.Rect(
+      src.cols*0.15,
+      src.rows*0.15,
+      src.cols*0.7,
+      src.rows*0.7
+    )
+  );
+
   let gray = new cv.Mat();
   let thresh = new cv.Mat();
 
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
   cv.GaussianBlur(gray, gray, new cv.Size(3,3), 0);
-  cv.threshold(gray, thresh, 120, 255, cv.THRESH_BINARY_INV);
+
+  // Adaptive Threshold กันแสงเปลี่ยน
+  cv.adaptiveThreshold(
+    gray,
+    thresh,
+    255,
+    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+    cv.THRESH_BINARY_INV,
+    11,
+    2
+  );
 
   let contours = new cv.MatVector();
   let hierarchy = new cv.Mat();
@@ -126,18 +160,22 @@ function processFrame(){
 
   let count = 0;
 
+  let minA = parseInt(document.getElementById("minArea").value) || 800;
+  let maxA = parseInt(document.getElementById("maxArea").value) || 20000;
+
   for(let i=0;i<contours.size();i++){
     let cnt = contours.get(i);
     let area = cv.contourArea(cnt);
 
-    if(area > 500){ // กรอง noise ปรับได้ตามจริง
+    if(area > minA && area < maxA){
       count++;
     }
   }
 
-  document.getElementById("count").innerText = "จำนวน: " + count;
+  updateStableCount(count);
 
   src.delete();
+  roi.delete();
   gray.delete();
   thresh.delete();
   contours.delete();
