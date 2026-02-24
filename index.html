@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>นับชิ้นงาน Real-time</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+<style>
+body { font-family: Arial; text-align:center; background:#f2f4f8; }
+video, canvas { width:90%; max-width:420px; margin:10px auto; }
+input, button {
+    font-size:18px;
+    padding:10px;
+    width:90%;
+    margin-top:8px;
+}
+#count {
+    font-size:38px;
+    color:#007AFF;
+    margin:10px;
+}
+</style>
+</head>
+
+<body>
+
+<h2>นับชิ้นงาน Real-time</h2>
+
+<input type="number" id="targetMM" placeholder="ขนาดชิ้นงาน (mm)" value="10">
+
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+
+<div id="count">จำนวนทั้งหมด: 0</div>
+
+<button onclick="toggleProcess()">⏸ หยุด / ▶ เริ่ม</button>
+
+<script>
+let mmPerPixel = 0.2;  // 🔧 ปรับตามการตั้งสเกลจริง
+let running = true;
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+// เปิดกล้องหลัง
+async function startCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false
+    });
+    video.srcObject = stream;
+}
+startCamera();
+
+function toggleProcess(){
+    running = !running;
+}
+
+function processFrame(){
+    if (!running || !video.videoWidth) {
+        requestAnimationFrame(processFrame);
+        return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    let targetMM = parseFloat(document.getElementById("targetMM").value);
+    let tolerance = targetMM * 0.2;
+
+    let src = cv.imread(canvas);
+    let gray = new cv.Mat();
+    let binary = new cv.Mat();
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(5,5), 0);
+    cv.threshold(gray, binary, 120, 255, cv.THRESH_BINARY_INV);
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(binary, contours, hierarchy,
+                    cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let count = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+        let cnt = contours.get(i);
+        let rect = cv.boundingRect(cnt);
+
+        let widthMM = rect.width * mmPerPixel;
+
+        if (Math.abs(widthMM - targetMM) < tolerance) {
+            count++;
+            let pt1 = new cv.Point(rect.x, rect.y);
+            let pt2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
+            cv.rectangle(src, pt1, pt2, [0,255,0,255], 2);
+        }
+
+        cnt.delete();
+    }
+
+    cv.imshow(canvas, src);
+    document.getElementById("count").innerText =
+        "จำนวนทั้งหมด: " + count;
+
+    src.delete(); gray.delete(); binary.delete();
+    contours.delete(); hierarchy.delete();
+
+    setTimeout(() => requestAnimationFrame(processFrame), 300);
+}
+
+cv['onRuntimeInitialized'] = () => {
+    processFrame();
+};
+</script>
+
+</body>
+</html>
